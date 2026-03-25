@@ -52,6 +52,17 @@ export interface FetcherResponse {
 }
 
 /**
+ * Aggregated Response for multiple fetchers
+ * Used when fetching rates from multiple currency sources
+ */
+export interface AggregatedFetcherResponse {
+  success: boolean;
+  data?: MarketRate[];
+  error?: string;
+  errors?: string[];
+}
+
+/**
  * Rate Fetch Error
  * Detailed error information for failed rate fetches
  */
@@ -67,9 +78,9 @@ export interface RateFetchError {
  * Represents the state of a circuit breaker
  */
 export enum CircuitBreakerState {
-  CLOSED = 'CLOSED',
-  OPEN = 'OPEN',
-  HALF_OPEN = 'HALF_OPEN'
+  CLOSED = "CLOSED",
+  OPEN = "OPEN",
+  HALF_OPEN = "HALF_OPEN",
 }
 
 /**
