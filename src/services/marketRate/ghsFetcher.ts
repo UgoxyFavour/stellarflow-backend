@@ -1,5 +1,5 @@
-import axios from 'axios';
-import { MarketRateFetcher, MarketRate } from './types';
+import axios from "axios";
+import { MarketRateFetcher, MarketRate, calculateMedian } from "./types";
 
 type CoinGeckoPriceResponse = {
   stellar?: {
@@ -19,74 +19,162 @@ type ExchangeRateApiResponse = {
 
 export class GHSRateFetcher implements MarketRateFetcher {
   private readonly coinGeckoUrl =
-    'https://api.coingecko.com/api/v3/simple/price?ids=stellar&vs_currencies=ghs,usd&include_last_updated_at=true';
+    "https://api.coingecko.com/api/v3/simple/price?ids=stellar&vs_currencies=ghs,usd&include_last_updated_at=true";
 
-  private readonly usdToGhsUrl = 'https://open.er-api.com/v6/latest/USD';
+  private readonly usdToGhsUrl = "https://open.er-api.com/v6/latest/USD";
 
   getCurrency(): string {
-    return 'GHS';
+    return "GHS";
   }
 
   async fetchRate(): Promise<MarketRate> {
+    const prices: { rate: number; timestamp: Date; source: string }[] = [];
+
+    // Strategy 1: Try CoinGecko direct GHS price
     try {
-      const coinGeckoResponse = await axios.get<CoinGeckoPriceResponse>(this.coinGeckoUrl, {
-        timeout: 10000,
-        headers: {
-          'User-Agent': 'StellarFlow-Oracle/1.0'
-        }
-      });
+      const coinGeckoResponse = await axios.get<CoinGeckoPriceResponse>(
+        this.coinGeckoUrl,
+        {
+          timeout: 10000,
+          headers: {
+            "User-Agent": "StellarFlow-Oracle/1.0",
+          },
+        },
+      );
 
       const stellarPrice = coinGeckoResponse.data.stellar;
-      if (!stellarPrice) {
-        throw new Error('CoinGecko did not return a Stellar price payload');
-      }
+      if (
+        stellarPrice &&
+        typeof stellarPrice.ghs === "number" &&
+        stellarPrice.ghs > 0
+      ) {
+        const lastUpdatedAt = stellarPrice.last_updated_at
+          ? new Date(stellarPrice.last_updated_at * 1000)
+          : new Date();
 
-      const lastUpdatedAt = stellarPrice.last_updated_at
-        ? new Date(stellarPrice.last_updated_at * 1000)
-        : new Date();
-
-      if (typeof stellarPrice.ghs === 'number' && stellarPrice.ghs > 0) {
-        return {
-          currency: 'GHS',
+        prices.push({
           rate: stellarPrice.ghs,
           timestamp: lastUpdatedAt,
-          source: 'CoinGecko'
-        };
+          source: "CoinGecko (direct)",
+        });
       }
+    } catch (error) {
+      console.debug("CoinGecko direct GHS price failed");
+    }
 
-      if (typeof stellarPrice.usd !== 'number' || stellarPrice.usd <= 0) {
-        throw new Error('CoinGecko did not return a usable USD price for Stellar');
+    // Strategy 2: CoinGecko XLM/USD + ExchangeRate API
+    try {
+      const coinGeckoResponse = await axios.get<CoinGeckoPriceResponse>(
+        this.coinGeckoUrl,
+        {
+          timeout: 10000,
+          headers: {
+            "User-Agent": "StellarFlow-Oracle/1.0",
+          },
+        },
+      );
+
+      const stellarPrice = coinGeckoResponse.data.stellar;
+      if (
+        stellarPrice &&
+        typeof stellarPrice.usd === "number" &&
+        stellarPrice.usd > 0
+      ) {
+        const exchangeRateResponse = await axios.get<ExchangeRateApiResponse>(
+          this.usdToGhsUrl,
+          {
+            timeout: 10000,
+            headers: {
+              "User-Agent": "StellarFlow-Oracle/1.0",
+            },
+          },
+        );
+
+        const usdToGhsRate = exchangeRateResponse.data.rates?.GHS;
+        if (
+          exchangeRateResponse.data.result === "success" &&
+          typeof usdToGhsRate === "number" &&
+          usdToGhsRate > 0
+        ) {
+          const fxTimestamp = exchangeRateResponse.data.time_last_update_unix
+            ? new Date(exchangeRateResponse.data.time_last_update_unix * 1000)
+            : new Date();
+          const lastUpdatedAt = stellarPrice.last_updated_at
+            ? new Date(stellarPrice.last_updated_at * 1000)
+            : new Date();
+
+          prices.push({
+            rate: stellarPrice.usd * usdToGhsRate,
+            timestamp:
+              fxTimestamp > lastUpdatedAt ? fxTimestamp : lastUpdatedAt,
+            source: "CoinGecko + ExchangeRate API",
+          });
+        }
       }
+    } catch (error) {
+      console.debug("CoinGecko + ExchangeRate API failed");
+    }
 
-      const exchangeRateResponse = await axios.get<ExchangeRateApiResponse>(this.usdToGhsUrl, {
+    // Strategy 3: Try alternative XLM pricing source
+    try {
+      const alternativeUrl =
+        "https://api.coingecko.com/api/v3/simple/price?ids=stellar&vs_currencies=usd";
+      const altResponse = await axios.get(alternativeUrl, {
         timeout: 10000,
         headers: {
-          'User-Agent': 'StellarFlow-Oracle/1.0'
-        }
+          "User-Agent": "StellarFlow-Oracle/1.0",
+        },
       });
 
-      const usdToGhsRate = exchangeRateResponse.data.rates?.GHS;
-      if (
-        exchangeRateResponse.data.result !== 'success' ||
-        typeof usdToGhsRate !== 'number' ||
-        usdToGhsRate <= 0
-      ) {
-        throw new Error('USD to GHS conversion feed did not return a usable GHS rate');
-      }
+      if (altResponse.data?.stellar?.usd) {
+        const xlmUsd = parseFloat(altResponse.data.stellar.usd);
+        if (!isNaN(xlmUsd) && xlmUsd > 0) {
+          const ghsResponse = await axios.get<ExchangeRateApiResponse>(
+            this.usdToGhsUrl,
+            {
+              timeout: 10000,
+              headers: {
+                "User-Agent": "StellarFlow-Oracle/1.0",
+              },
+            },
+          );
 
-      const fxTimestamp = exchangeRateResponse.data.time_last_update_unix
-        ? new Date(exchangeRateResponse.data.time_last_update_unix * 1000)
-        : lastUpdatedAt;
+          const ghsRate = ghsResponse.data.rates?.GHS;
+          if (
+            ghsResponse.data.result === "success" &&
+            typeof ghsRate === "number" &&
+            ghsRate > 0
+          ) {
+            prices.push({
+              rate: xlmUsd * ghsRate,
+              timestamp: new Date(),
+              source: "Alternative XLM pricing",
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.debug("Alternative XLM pricing source failed");
+    }
+
+    // If we have prices, calculate median
+    if (prices.length > 0) {
+      const rateValues = prices.map((p) => p.rate);
+      const medianRate = calculateMedian(rateValues);
+      const mostRecentTimestamp = prices.reduce(
+        (latest, p) => (p.timestamp > latest ? p.timestamp : latest),
+        prices[0]?.timestamp ?? new Date(),
+      );
 
       return {
-        currency: 'GHS',
-        rate: stellarPrice.usd * usdToGhsRate,
-        timestamp: fxTimestamp > lastUpdatedAt ? fxTimestamp : lastUpdatedAt,
-        source: 'CoinGecko + ExchangeRate API'
+        currency: "GHS",
+        rate: medianRate,
+        timestamp: mostRecentTimestamp,
+        source: `Median of ${prices.length} sources`,
       };
-    } catch (error) {
-      throw new Error(`Failed to fetch GHS rate: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+
+    throw new Error("All GHS rate sources failed");
   }
 
   async isHealthy(): Promise<boolean> {
