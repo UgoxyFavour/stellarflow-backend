@@ -1,21 +1,41 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import { Horizon } from '@stellar/stellar-sdk';
-import marketRatesRouter from './routes/marketRates';
-import prisma from './lib/prisma';
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import { Horizon } from "@stellar/stellar-sdk";
+import marketRatesRouter from "./routes/marketRates";
+import prisma from "./lib/prisma";
 
 // Load environment variables
 dotenv.config();
+
+// Validate required environment variables
+const requiredEnvVars = ["STELLAR_SECRET", "DATABASE_URL"] as const;
+const missingEnvVars: string[] = [];
+
+for (const envVar of requiredEnvVars) {
+  if (!process.env[envVar]) {
+    missingEnvVars.push(envVar);
+  }
+}
+
+if (missingEnvVars.length > 0) {
+  console.error("❌ Missing required environment variables:");
+  missingEnvVars.forEach((varName) => console.error(`   - ${varName}`));
+  console.error(
+    "\nPlease set these variables in your .env file and restart the server.",
+  );
+  process.exit(1);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Horizon server for health checks
-const stellarNetwork = process.env.STELLAR_NETWORK || 'TESTNET';
-const horizonUrl = stellarNetwork === 'PUBLIC'
-  ? 'https://horizon.stellar.org'
-  : 'https://horizon-testnet.stellar.org';
+const stellarNetwork = process.env.STELLAR_NETWORK || "TESTNET";
+const horizonUrl =
+  stellarNetwork === "PUBLIC"
+    ? "https://horizon.stellar.org"
+    : "https://horizon-testnet.stellar.org";
 const horizonServer = new Horizon.Server(horizonUrl);
 
 // Middleware
@@ -23,10 +43,10 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
-app.use('/api/market-rates', marketRatesRouter);
+app.use("/api/market-rates", marketRatesRouter);
 
 // Health check endpoint
-app.get('/health', async (req, res) => {
+app.get("/health", async (req, res) => {
   const checks: { database: boolean; horizon: boolean } = {
     database: false,
     horizon: false,
@@ -52,53 +72,64 @@ app.get('/health', async (req, res) => {
 
   res.status(healthy ? 200 : 503).json({
     success: healthy,
-    message: healthy ? 'All systems operational' : 'One or more services unavailable',
+    message: healthy
+      ? "All systems operational"
+      : "One or more services unavailable",
     timestamp: new Date().toISOString(),
     checks,
   });
 });
 
 // Root endpoint
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.json({
     success: true,
-    message: 'StellarFlow Backend API',
-    version: '1.0.0',
+    message: "StellarFlow Backend API",
+    version: "1.0.0",
     endpoints: {
-      health: '/health',
+      health: "/health",
       marketRates: {
-        allRates: '/api/market-rates/rates',
-        singleRate: '/api/market-rates/rate/:currency',
-        health: '/api/market-rates/health',
-        currencies: '/api/market-rates/currencies',
-        cache: '/api/market-rates/cache',
-        clearCache: 'POST /api/market-rates/cache/clear'
-      }
-    }
+        allRates: "/api/market-rates/rates",
+        singleRate: "/api/market-rates/rate/:currency",
+        health: "/api/market-rates/health",
+        currencies: "/api/market-rates/currencies",
+        cache: "/api/market-rates/cache",
+        clearCache: "POST /api/market-rates/cache/clear",
+      },
+    },
   });
 });
 
 // Error handling middleware
-app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({
-    success: false,
-    error: 'Internal server error'
-  });
-});
+app.use(
+  (
+    err: Error,
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    console.error("Unhandled error:", err);
+    res.status(500).json({
+      success: false,
+      error: "Internal server error",
+    });
+  },
+);
 
 // 404 handler
-app.use('*', (req, res) => {
+app.use("*", (req, res) => {
   res.status(404).json({
     success: false,
-    error: 'Endpoint not found'
+    error: "Endpoint not found",
   });
 });
 
 // Start server
 app.listen(PORT, () => {
   console.log(`🌊 StellarFlow Backend running on port ${PORT}`);
-  console.log(`📊 Market Rates API available at http://localhost:${PORT}/api/market-rates`);
+  console.log(
+    `📊 Market Rates API available at http://localhost:${PORT}/api/market-rates`,
+  );
   console.log(`🏥 Health check at http://localhost:${PORT}/health`);
 });
 
